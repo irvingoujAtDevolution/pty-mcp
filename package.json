@@ -1,0 +1,48 @@
+{
+  "name": "pty-mcp",
+  "version": "1.0.0",
+  "description": "Interactive terminal MCP server - Playwright for terminals",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "pty-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:keys": "vitest run keys",
+    "test:session": "vitest run session",
+    "test:ps": "vitest run powershell",
+    "test:mcp": "vitest run mcp"
+  },
+  "keywords": ["cli", "mcp", "typescript", "pty", "terminal"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@xterm/headless": "^5.5.0",
+    "node-pty": "^1.0.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/uuid": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
