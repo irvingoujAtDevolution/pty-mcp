@@ -156,7 +156,7 @@ export function createServer(): ServerWithCallTool {
 
   // get_snapshot
   toolHandlers["get_snapshot"] = async (args) => {
-    const { session_id } = args as { session_id: string };
+    const { session_id, include_ansi } = args as { session_id: string; include_ansi?: boolean };
     const session = manager.get(session_id);
     if (!session) {
       return {
@@ -165,7 +165,7 @@ export function createServer(): ServerWithCallTool {
         ],
       };
     }
-    const snapshot = session.getSnapshot();
+    const snapshot = session.getSnapshot({ includeAnsi: include_ansi });
     return {
       content: [{ type: "text" as const, text: JSON.stringify(snapshot) }],
     };
@@ -178,10 +178,11 @@ export function createServer(): ServerWithCallTool {
       description: "Read the terminal screen - this is your 'eyes' into the terminal. Returns the visible screen buffer with line numbers, cursor position, and dimensions. Use this after sending commands to see the output, check for prompts, or verify the terminal state. Call frequently to see what's happening.",
       inputSchema: {
         session_id: z.string().describe("Session ID from spawn_session"),
+        include_ansi: z.boolean().optional().describe("Include raw ANSI escape sequences for debugging TUIs (default: false)"),
       },
     },
-    async ({ session_id }) => {
-      const result = await toolHandlers["get_snapshot"]({ session_id });
+    async ({ session_id, include_ansi }) => {
+      const result = await toolHandlers["get_snapshot"]({ session_id, include_ansi });
       return toMcpResult(result);
     }
   );
@@ -268,6 +269,201 @@ export function createServer(): ServerWithCallTool {
     },
     async ({ session_id }) => {
       const result = await toolHandlers["close_session"]({ session_id });
+      return toMcpResult(result);
+    }
+  );
+
+  // send_line - convenience method that sends text + Enter
+  toolHandlers["send_line"] = async (args) => {
+    const { session_id, text } = args as { session_id: string; text: string };
+    const session = manager.get(session_id);
+    if (!session) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ success: false, error: "Session not found" }),
+          },
+        ],
+      };
+    }
+    session.sendLine(text);
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify({ success: true }) }],
+    };
+  };
+
+  server.registerTool(
+    "send_line",
+    {
+      title: "Send Line",
+      description:
+        "Send a line of text followed by Enter - the most common operation. Equivalent to send_keys({keys: text}) + send_keys({keys: 'Enter'}). Use this for executing commands.",
+      inputSchema: {
+        session_id: z.string().describe("Session ID from spawn_session"),
+        text: z.string().describe("Command or text to send (Enter is added automatically)"),
+      },
+    },
+    async ({ session_id, text }) => {
+      const result = await toolHandlers["send_line"]({ session_id, text });
+      return toMcpResult(result);
+    }
+  );
+
+  // wait_for_content - wait for pattern to appear in screen
+  toolHandlers["wait_for_content"] = async (args) => {
+    const { session_id, pattern, timeout, is_regex } = args as {
+      session_id: string;
+      pattern: string;
+      timeout?: number;
+      is_regex?: boolean;
+    };
+    const session = manager.get(session_id);
+    if (!session) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ success: false, error: "Session not found" }),
+          },
+        ],
+      };
+    }
+    try {
+      const searchPattern = is_regex ? new RegExp(pattern) : pattern;
+      const content = await session.waitForContent(searchPattern, { timeout: timeout || 10000 });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ success: true, content }),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              success: false,
+              error: err instanceof Error ? err.message : "Timeout",
+            }),
+          },
+        ],
+      };
+    }
+  };
+
+  server.registerTool(
+    "wait_for_content",
+    {
+      title: "Wait For Content",
+      description:
+        "Wait for specific content to appear in the terminal screen. Use this after sending commands to wait for output or prompts. Returns the screen content when the pattern is found.",
+      inputSchema: {
+        session_id: z.string().describe("Session ID from spawn_session"),
+        pattern: z.string().describe("Text or regex pattern to wait for (e.g., 'PS .*>' for PowerShell prompt)"),
+        timeout: z.number().optional().describe("Timeout in milliseconds (default: 10000)"),
+        is_regex: z.boolean().optional().describe("Treat pattern as regex (default: false, treats as literal string)"),
+      },
+    },
+    async ({ session_id, pattern, timeout, is_regex }) => {
+      const result = await toolHandlers["wait_for_content"]({
+        session_id,
+        pattern,
+        timeout,
+        is_regex,
+      });
+      return toMcpResult(result);
+    }
+  );
+
+  // wait_for_idle - wait for screen to stop changing
+  toolHandlers["wait_for_idle"] = async (args) => {
+    const { session_id, timeout, stable_time } = args as {
+      session_id: string;
+      timeout?: number;
+      stable_time?: number;
+    };
+    const session = manager.get(session_id);
+    if (!session) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ success: false, error: "Session not found" }),
+          },
+        ],
+      };
+    }
+    const content = await session.waitForIdle({
+      timeout: timeout || 5000,
+      stableTime: stable_time || 300,
+    });
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({ success: true, content }),
+        },
+      ],
+    };
+  };
+
+  server.registerTool(
+    "wait_for_idle",
+    {
+      title: "Wait For Idle",
+      description:
+        "Wait for the terminal screen to stop changing. Useful when you don't know exactly what output to expect, but want to wait until the command finishes producing output.",
+      inputSchema: {
+        session_id: z.string().describe("Session ID from spawn_session"),
+        timeout: z.number().optional().describe("Maximum wait time in milliseconds (default: 5000)"),
+        stable_time: z.number().optional().describe("How long screen must be stable to be considered idle (default: 300ms)"),
+      },
+    },
+    async ({ session_id, timeout, stable_time }) => {
+      const result = await toolHandlers["wait_for_idle"]({
+        session_id,
+        timeout,
+        stable_time,
+      });
+      return toMcpResult(result);
+    }
+  );
+
+  // get_cursor - get current cursor position
+  toolHandlers["get_cursor"] = async (args) => {
+    const { session_id } = args as { session_id: string };
+    const session = manager.get(session_id);
+    if (!session) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ error: "Session not found" }),
+          },
+        ],
+      };
+    }
+    const cursor = session.getCursor();
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(cursor) }],
+    };
+  };
+
+  server.registerTool(
+    "get_cursor",
+    {
+      title: "Get Cursor Position",
+      description: "Get the current cursor position in the terminal (x=column, y=row, 0-indexed)",
+      inputSchema: {
+        session_id: z.string().describe("Session ID from spawn_session"),
+      },
+    },
+    async ({ session_id }) => {
+      const result = await toolHandlers["get_cursor"]({ session_id });
       return toMcpResult(result);
     }
   );

@@ -20,6 +20,7 @@ export interface Snapshot {
   cursor: { x: number; y: number };
   rows: number;
   cols: number;
+  rawAnsi?: string;
 }
 
 export class Session {
@@ -29,6 +30,8 @@ export class Session {
 
   private ptyProcess: pty.IPty;
   private terminal: TerminalType;
+  private rawAnsiBuffer: string[] = [];
+  private maxRawBufferSize = 10000; // Keep last 10K chars of raw ANSI
 
   constructor(id: string, options: SessionOptions) {
     const { command, args = [], cwd, cols = 80, rows = 24 } = options;
@@ -52,7 +55,28 @@ export class Session {
     // Pipe PTY output to xterm for buffer management
     this.ptyProcess.onData((data: string) => {
       this.terminal.write(data);
+      // Capture raw ANSI for debugging
+      this.rawAnsiBuffer.push(data);
+      // Trim buffer if too large
+      const totalLen = this.rawAnsiBuffer.reduce((a, b) => a + b.length, 0);
+      while (totalLen > this.maxRawBufferSize && this.rawAnsiBuffer.length > 1) {
+        this.rawAnsiBuffer.shift();
+      }
     });
+  }
+
+  /**
+   * Get raw ANSI buffer (for debugging TUIs)
+   */
+  getRawAnsi(): string {
+    return this.rawAnsiBuffer.join("");
+  }
+
+  /**
+   * Clear raw ANSI buffer
+   */
+  clearRawAnsi(): void {
+    this.rawAnsiBuffer = [];
   }
 
 
@@ -92,9 +116,49 @@ export class Session {
   }
 
   /**
+   * Send a line of text followed by Enter (convenience method)
+   */
+  sendLine(text: string): void {
+    this.ptyProcess.write(text + "\r");
+  }
+
+  /**
+   * Get current cursor position
+   */
+  getCursor(): { x: number; y: number } {
+    const buffer = this.terminal.buffer.active;
+    return { x: buffer.cursorX, y: buffer.cursorY };
+  }
+
+  /**
+   * Wait for screen to stop changing (idle detection)
+   */
+  async waitForIdle(options: { timeout?: number; stableTime?: number } = {}): Promise<string> {
+    const { timeout = 5000, stableTime = 300 } = options;
+    const start = Date.now();
+    let lastContent = "";
+    let stableSince = Date.now();
+
+    while (Date.now() - start < timeout) {
+      const snap = this.getSnapshot();
+      if (snap.content === lastContent) {
+        if (Date.now() - stableSince >= stableTime) {
+          return snap.content;
+        }
+      } else {
+        lastContent = snap.content;
+        stableSince = Date.now();
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    return this.getSnapshot().content;
+  }
+
+  /**
    * Get current screen buffer snapshot
    */
-  getSnapshot(): Snapshot {
+  getSnapshot(options: { includeAnsi?: boolean } = {}): Snapshot {
     const buffer = this.terminal.buffer.active;
     const lines: string[] = [];
 
@@ -105,12 +169,18 @@ export class Session {
       lines.push(`${lineNum} | ${text}`);
     }
 
-    return {
+    const snapshot: Snapshot = {
       content: lines.join("\n"),
       cursor: { x: buffer.cursorX, y: buffer.cursorY },
       rows: this.terminal.rows,
       cols: this.terminal.cols,
     };
+
+    if (options.includeAnsi) {
+      snapshot.rawAnsi = this.getRawAnsi();
+    }
+
+    return snapshot;
   }
 
   /**

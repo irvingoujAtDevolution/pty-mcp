@@ -15,14 +15,25 @@ This MCP server gives agents **eyes** (screen buffer) and **hands** (keyboard in
 
 ## Tools
 
+### Core Tools
+
 | Tool | Description |
 |------|-------------|
 | `spawn_session` | Start a new terminal (pwsh, cmd, bash) |
 | `send_keys` | Type text or press special keys |
+| `send_line` | **NEW** Send text + Enter (most common operation) |
 | `get_snapshot` | Read the current screen buffer |
+| `get_cursor` | **NEW** Get cursor position (x, y) |
 | `resize` | Change terminal dimensions |
 | `list_sessions` | List active sessions |
 | `close_session` | Kill a session |
+
+### Wait Tools (for synchronization)
+
+| Tool | Description |
+|------|-------------|
+| `wait_for_content` | **NEW** Wait for specific text/pattern to appear |
+| `wait_for_idle` | **NEW** Wait for screen to stop changing |
 
 ## Correct Usage
 
@@ -44,29 +55,45 @@ send_keys({ keys: "Enter" })
 get_snapshot()  // read the output
 ```
 
-### Basic Workflow
+### Basic Workflow (Recommended)
 
 ```
 1. spawn_session({ command: "pwsh.exe", args: ["-NoProfile", "-NoLogo"] })
    → Returns: { session_id: "abc-123", pid: 12345 }
 
+2. wait_for_content({ session_id: "abc-123", pattern: "PS .*>", is_regex: true })
+   → Waits for prompt, returns screen content
+
+3. send_line({ session_id: "abc-123", text: "Get-Date" })
+   → Types command + presses Enter (one call!)
+
+4. wait_for_content({ session_id: "abc-123", pattern: "PS .*>", is_regex: true })
+   → Waits for next prompt (command finished)
+   → Returns screen with output
+
+5. close_session({ session_id: "abc-123" })
+   → Clean up when done
+```
+
+### Alternative: Manual Control
+
+```
+1. spawn_session({ command: "pwsh.exe", args: ["-NoProfile", "-NoLogo"] })
+
 2. get_snapshot({ session_id: "abc-123" })
    → See: "PS C:\Users\jou>" (prompt is ready)
 
 3. send_keys({ session_id: "abc-123", keys: "Get-Date" })
-   → Types the command (visible on screen)
+   → Types the command
 
 4. send_keys({ session_id: "abc-123", keys: "Enter" })
    → Executes the command
 
-5. get_snapshot({ session_id: "abc-123" })
-   → See the output:
-   "PS C:\Users\jou> Get-Date
-    Tuesday, January 28, 2025 10:30:00 PM
-    PS C:\Users\jou>"
+5. wait_for_idle({ session_id: "abc-123" })
+   → Wait for output to finish
 
-6. close_session({ session_id: "abc-123" })
-   → Clean up when done
+6. get_snapshot({ session_id: "abc-123" })
+   → See the output
 ```
 
 ### Special Keys
@@ -158,6 +185,37 @@ send_keys({ keys: "Enter" })
 send_keys({ keys: "Up" })      // Previous command
 get_snapshot()                  // See "Get-Date" on command line
 send_keys({ keys: "Enter" })   // Run it again
+```
+
+### Using wait tools (recommended)
+
+```
+// Wait for PowerShell prompt
+wait_for_content({ session_id, pattern: "PS .*>", is_regex: true })
+
+// Wait for specific output
+send_line({ session_id, text: "Get-Process explorer" })
+wait_for_content({ session_id, pattern: "explorer" })
+
+// Wait for command to finish (screen stops changing)
+send_line({ session_id, text: "Get-Process | Sort-Object CPU -Descending" })
+wait_for_idle({ session_id, timeout: 10000 })
+get_snapshot({ session_id })
+
+// Wait with timeout
+wait_for_content({
+  session_id,
+  pattern: "Password:",
+  timeout: 30000  // 30 seconds
+})
+```
+
+### Debugging TUIs (vim, htop, etc.)
+
+```
+// Get raw ANSI escape sequences for debugging
+get_snapshot({ session_id, include_ansi: true })
+→ Returns: { content: "...", rawAnsi: "\x1b[1;1H\x1b[2J..." }
 ```
 
 ## Snapshot Format
