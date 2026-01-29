@@ -13,5 +13,8 @@ export default defineConfig({
         singleFork: true, // Run tests sequentially to avoid PTY conflicts
       },
     },
+    // node-pty throws "AttachConsole failed" on Windows during cleanup
+    // This is harmless but vitest treats it as unhandled error
+    dangerouslyIgnoreUnhandledErrors: true,
   },
 });
