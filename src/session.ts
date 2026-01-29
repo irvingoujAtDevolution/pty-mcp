@@ -116,10 +116,36 @@ export class Session {
   }
 
   /**
+   * Send keystrokes with pacing (one character at a time with delays)
+   * This helps with programs that read input character-by-character in raw mode
+   */
+  async sendKeysPaced(keys: string, paceMs: number = 10, modifiers?: Modifiers): Promise<void> {
+    const sequence = resolveKeys(keys, modifiers);
+    for (const char of sequence) {
+      this.ptyProcess.write(char);
+      await new Promise((r) => setTimeout(r, paceMs));
+    }
+  }
+
+  /**
    * Send a line of text followed by Enter (convenience method)
    */
   sendLine(text: string): void {
     this.ptyProcess.write(text + "\r");
+  }
+
+  /**
+   * Send a line with pacing (character by character with delays)
+   * Use this when the receiving program drops characters from bulk writes
+   */
+  async sendLinePaced(text: string, paceMs: number = 10): Promise<void> {
+    for (const char of text) {
+      this.ptyProcess.write(char);
+      await new Promise((r) => setTimeout(r, paceMs));
+    }
+    // Small extra delay before Enter to ensure all chars processed
+    await new Promise((r) => setTimeout(r, paceMs));
+    this.ptyProcess.write("\r");
   }
 
   /**

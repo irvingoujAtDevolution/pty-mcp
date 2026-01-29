@@ -103,10 +103,11 @@ export function createServer(): ServerWithCallTool {
 
   // send_keys
   toolHandlers["send_keys"] = async (args) => {
-    const { session_id, keys, modifiers } = args as {
+    const { session_id, keys, modifiers, pace_ms } = args as {
       session_id: string;
       keys: string;
       modifiers?: Modifiers;
+      pace_ms?: number;
     };
     const session = manager.get(session_id);
     if (!session) {
@@ -119,7 +120,11 @@ export function createServer(): ServerWithCallTool {
         ],
       };
     }
-    session.sendKeys(keys, modifiers);
+    if (pace_ms && pace_ms > 0) {
+      await session.sendKeysPaced(keys, pace_ms, modifiers);
+    } else {
+      session.sendKeys(keys, modifiers);
+    }
     return {
       content: [{ type: "text" as const, text: JSON.stringify({ success: true }) }],
     };
@@ -130,7 +135,7 @@ export function createServer(): ServerWithCallTool {
     {
       title: "Send Keys",
       description:
-        "Send keystrokes to terminal like a human typing. IMPORTANT: Use 'Enter' as a separate call to execute commands - do NOT use '\\n' in the keys string. Example workflow: send_keys({keys:'pwd'}) then send_keys({keys:'Enter'}) then get_snapshot(). Special keys: Enter, Tab, Escape, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, F1-F12. Use modifiers for Ctrl+C ({keys:'c', modifiers:{ctrl:true}}).",
+        "Send keystrokes to terminal like a human typing. IMPORTANT: Use 'Enter' as a separate call to execute commands - do NOT use '\\n' in the keys string. Example workflow: send_keys({keys:'pwd'}) then send_keys({keys:'Enter'}) then get_snapshot(). Special keys: Enter, Tab, Escape, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, F1-F12. Use modifiers for Ctrl+C ({keys:'c', modifiers:{ctrl:true}}). Use pace_ms if the receiving program drops characters.",
       inputSchema: {
         session_id: z.string().describe("Session ID from spawn_session"),
         keys: z.string().describe("Text to type OR a special key name. Use 'Enter' to execute commands (not '\\n'). Examples: 'Get-Date', 'Enter', 'Up', 'Tab'"),
@@ -142,13 +147,15 @@ export function createServer(): ServerWithCallTool {
           })
           .optional()
           .describe("Key modifiers for combinations like Ctrl+C"),
+        pace_ms: z.number().optional().describe("Delay between characters in ms for paced typing (use 10-50ms if program drops chars from bulk input)"),
       },
     },
-    async ({ session_id, keys, modifiers }) => {
+    async ({ session_id, keys, modifiers, pace_ms }) => {
       const result = await toolHandlers["send_keys"]({
         session_id,
         keys,
         modifiers: modifiers as Modifiers | undefined,
+        pace_ms,
       });
       return toMcpResult(result);
     }
@@ -275,7 +282,7 @@ export function createServer(): ServerWithCallTool {
 
   // send_line - convenience method that sends text + Enter
   toolHandlers["send_line"] = async (args) => {
-    const { session_id, text } = args as { session_id: string; text: string };
+    const { session_id, text, pace_ms } = args as { session_id: string; text: string; pace_ms?: number };
     const session = manager.get(session_id);
     if (!session) {
       return {
@@ -287,7 +294,11 @@ export function createServer(): ServerWithCallTool {
         ],
       };
     }
-    session.sendLine(text);
+    if (pace_ms && pace_ms > 0) {
+      await session.sendLinePaced(text, pace_ms);
+    } else {
+      session.sendLine(text);
+    }
     return {
       content: [{ type: "text" as const, text: JSON.stringify({ success: true }) }],
     };
@@ -298,14 +309,15 @@ export function createServer(): ServerWithCallTool {
     {
       title: "Send Line",
       description:
-        "Send a line of text followed by Enter - the most common operation. Equivalent to send_keys({keys: text}) + send_keys({keys: 'Enter'}). Use this for executing commands.",
+        "Send a line of text followed by Enter - the most common operation. Equivalent to send_keys({keys: text}) + send_keys({keys: 'Enter'}). Use this for executing commands. Use pace_ms if the receiving program drops characters from bulk input.",
       inputSchema: {
         session_id: z.string().describe("Session ID from spawn_session"),
         text: z.string().describe("Command or text to send (Enter is added automatically)"),
+        pace_ms: z.number().optional().describe("Delay between characters in ms for paced typing (use 10-50ms if program drops chars)"),
       },
     },
-    async ({ session_id, text }) => {
-      const result = await toolHandlers["send_line"]({ session_id, text });
+    async ({ session_id, text, pace_ms }) => {
+      const result = await toolHandlers["send_line"]({ session_id, text, pace_ms });
       return toMcpResult(result);
     }
   );

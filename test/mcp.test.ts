@@ -228,4 +228,97 @@ describe("MCP Server Tools", () => {
       expect(data.success).toBe(false);
     });
   });
+
+  describe("paced typing via MCP", () => {
+    let sessionId: string;
+
+    beforeEach(async () => {
+      const result = await server.callTool("spawn_session", {
+        command: PWSH_COMMAND,
+        args: ["-NoProfile", "-NoLogo"],
+      });
+      const data = JSON.parse(result.content[0].text);
+      sessionId = data.session_id;
+      await sleep(PWSH_STARTUP_WAIT);
+    });
+
+    it("T15: send_keys with pace_ms types all characters", async () => {
+      // Send with pacing
+      const result = await server.callTool("send_keys", {
+        session_id: sessionId,
+        keys: "pwd",
+        pace_ms: 10,
+      });
+
+      const data = JSON.parse(result.content[0].text);
+      expect(data.success).toBe(true);
+
+      // Verify the text appeared
+      await sleep(200);
+      const snap = await server.callTool("get_snapshot", { session_id: sessionId });
+      const snapData = JSON.parse(snap.content[0].text);
+      expect(snapData.content).toContain("pwd");
+    });
+
+    it("T16: send_line with pace_ms executes command correctly", async () => {
+      // Send line with pacing
+      const result = await server.callTool("send_line", {
+        session_id: sessionId,
+        text: "Write-Host 'MCP_PACED_OK'",
+        pace_ms: 10,
+      });
+
+      const data = JSON.parse(result.content[0].text);
+      expect(data.success).toBe(true);
+
+      // Wait for output
+      const waitResult = await server.callTool("wait_for_content", {
+        session_id: sessionId,
+        pattern: "MCP_PACED_OK",
+        timeout: 5000,
+      });
+      const waitData = JSON.parse(waitResult.content[0].text);
+      expect(waitData.success).toBe(true);
+      expect(waitData.content).toContain("MCP_PACED_OK");
+    });
+
+    it("T17: send_line without pace_ms still works (bulk mode)", async () => {
+      // Send line without pacing (original behavior)
+      const result = await server.callTool("send_line", {
+        session_id: sessionId,
+        text: "Write-Host 'BULK_OK'",
+      });
+
+      const data = JSON.parse(result.content[0].text);
+      expect(data.success).toBe(true);
+
+      // Wait for output
+      const waitResult = await server.callTool("wait_for_content", {
+        session_id: sessionId,
+        pattern: "BULK_OK",
+        timeout: 5000,
+      });
+      const waitData = JSON.parse(waitResult.content[0].text);
+      expect(waitData.success).toBe(true);
+    });
+
+    it("T18: pace_ms=0 uses bulk mode", async () => {
+      const result = await server.callTool("send_line", {
+        session_id: sessionId,
+        text: "Write-Host 'ZERO_PACE'",
+        pace_ms: 0,
+      });
+
+      const data = JSON.parse(result.content[0].text);
+      expect(data.success).toBe(true);
+
+      const waitResult = await server.callTool("wait_for_content", {
+        session_id: sessionId,
+        pattern: "ZERO_PACE",
+        timeout: 5000,
+      });
+      const waitData = JSON.parse(waitResult.content[0].text);
+      expect(waitData.success).toBe(true);
+    });
+  });
 });

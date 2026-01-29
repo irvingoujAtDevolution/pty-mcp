@@ -139,4 +139,55 @@ describe("Session Class", () => {
       expect(snap.content).toContain("C:\\");
     });
   });
+
+  describe("Paced Typing", () => {
+    beforeEach(async () => {
+      session = new Session("paced-test", { command: PWSH_COMMAND, args: ["-NoProfile", "-NoLogo"] });
+      await session.waitForContent(PS_PROMPT_PATTERN);
+    });
+
+    it("sendKeysPaced sends all characters correctly", async () => {
+      // Send "pwd" with pacing
+      await session.sendKeysPaced("pwd", 10);
+      await sleep(100);
+
+      const snap = session.getSnapshot();
+      // The typed text should appear on the prompt line
+      expect(snap.content).toContain("pwd");
+    });
+
+    it("sendLinePaced executes command successfully", async () => {
+      // Use a simple command that produces predictable output
+      await session.sendLinePaced("Write-Host 'PACED_TEST_OK'", 10);
+
+      // Wait for the output and next prompt
+      await session.waitForContent("PACED_TEST_OK");
+
+      const snap = session.getSnapshot();
+      expect(snap.content).toContain("PACED_TEST_OK");
+    });
+
+    it("sendLinePaced handles longer text without dropping characters", async () => {
+      const longText = "Write-Host 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'";
+      await session.sendLinePaced(longText, 5);
+
+      await session.waitForContent("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+
+      const snap = session.getSnapshot();
+      expect(snap.content).toContain("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    });
+
+    it("paced typing works with special characters", async () => {
+      await session.sendLinePaced("Write-Host '$env:USERNAME'", 10);
+
+      // Wait for prompt (command executed)
+      await session.waitForContent(PS_PROMPT_PATTERN, { timeout: 5000 });
+      await sleep(200);
+
+      // Should have executed without errors
+      const snap = session.getSnapshot();
+      // The command should have been typed correctly (visible in history)
+      expect(snap.content).toContain("$env:USERNAME");
+    });
+  });
 });
