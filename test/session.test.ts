@@ -69,6 +69,67 @@ describe("Session Class", () => {
     });
   });
 
+  describe("Buffer Range", () => {
+    beforeEach(async () => {
+      session = new Session("range-test", {
+        command: PWSH_COMMAND,
+        args: ["-NoProfile", "-NoLogo"],
+        scrollback: 200,
+      });
+      await session.waitForContent(PS_PROMPT_PATTERN);
+    });
+
+    it("S07: Buffer range includes scrollback lines", async () => {
+      session.sendLine('1..40 | ForEach-Object { "LINE_$($_)" }');
+      await session.waitForContent("LINE_40");
+
+      const range = session.getBufferRange({ start: -40, count: 40 });
+      expect(range.total).toBeGreaterThanOrEqual(24);
+      expect(range.content).toContain("LINE_1");
+      expect(range.content).toContain("LINE_40");
+    });
+
+    it("S08: Buffer range can exclude lines by pattern", async () => {
+      session.sendLine('1..10 | ForEach-Object { "FILTER_$($_)" }');
+      await session.waitForContent("FILTER_10");
+
+      const range = session.getBufferRange({
+        start: -10,
+        count: 10,
+        excludePattern: "FILTER_1",
+      });
+      expect(range.content).not.toContain("FILTER_1");
+      expect(range.content).toContain("FILTER_10");
+      expect(range.returned).toBeLessThanOrEqual(10);
+    });
+  });
+
+  describe("Buffer Info + Wait", () => {
+    beforeEach(async () => {
+      session = new Session("buffer-info-test", {
+        command: PWSH_COMMAND,
+        args: ["-NoProfile", "-NoLogo"],
+        scrollback: 200,
+      });
+      await session.waitForContent(PS_PROMPT_PATTERN);
+    });
+
+    it("S09: Buffer info returns length and cursor", () => {
+      const info = session.getBufferInfo();
+      expect(info.total).toBeGreaterThanOrEqual(24);
+      expect(info.cursor.x).toBeGreaterThanOrEqual(0);
+      expect(info.cursor.y).toBeGreaterThanOrEqual(0);
+      expect(info.rows).toBe(24);
+    });
+
+    it("S10: waitForBufferLines waits for new output", async () => {
+      const startInfo = session.getBufferInfo();
+      session.sendLine('1..30 | ForEach-Object { "WAIT_$($_)" }');
+      const total = await session.waitForBufferLines({ minDelta: 10, timeout: 5000 });
+      expect(total).toBeGreaterThan(startInfo.total);
+    });
+  });
+
   describe("Send Keys", () => {
     beforeEach(async () => {
       session = new Session("keys-test", { command: PWSH_COMMAND, args: ["-NoProfile", "-NoLogo"] });

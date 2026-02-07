@@ -13,6 +13,7 @@ export interface SessionOptions {
   cwd?: string;
   cols?: number;
   rows?: number;
+  scrollback?: number;
 }
 
 export interface Snapshot {
@@ -21,6 +22,29 @@ export interface Snapshot {
   rows: number;
   cols: number;
   rawAnsi?: string;
+}
+
+export interface BufferInfo {
+  total: number;
+  viewportY: number;
+  baseY: number;
+  rows: number;
+  cols: number;
+  cursor: { x: number; y: number };
+  buffer: "active" | "normal" | "alternate";
+}
+
+export interface BufferRangeSnapshot {
+  content: string;
+  start: number;
+  count: number;
+  returned: number;
+  total: number;
+  viewportY: number;
+  baseY: number;
+  rows: number;
+  cols: number;
+  buffer: "active" | "normal" | "alternate";
 }
 
 export class Session {
@@ -34,13 +58,13 @@ export class Session {
   private maxRawBufferSize = 10000; // Keep last 10K chars of raw ANSI
 
   constructor(id: string, options: SessionOptions) {
-    const { command, args = [], cwd, cols = 80, rows = 24 } = options;
+    const { command, args = [], cwd, cols = 80, rows = 24, scrollback = 5000 } = options;
 
     this.id = id;
     this.command = command;
 
     // Create headless xterm for VT parsing
-    this.terminal = new Terminal({ cols, rows, allowProposedApi: true });
+    this.terminal = new Terminal({ cols, rows, scrollback, allowProposedApi: true });
 
     // Spawn PTY (uses ConPTY on Windows)
     this.ptyProcess = pty.spawn(command, args, {
@@ -207,6 +231,147 @@ export class Session {
     }
 
     return snapshot;
+  }
+
+  /**
+   * Get buffer metadata for deterministic reads
+   */
+  getBufferInfo(bufferName: "active" | "normal" | "alternate" = "active"): BufferInfo {
+    const buffer =
+      bufferName === "normal"
+        ? this.terminal.buffer.normal
+        : bufferName === "alternate"
+          ? this.terminal.buffer.alternate
+          : this.terminal.buffer.active;
+
+    return {
+      total: buffer.length,
+      viewportY: buffer.viewportY,
+      baseY: buffer.baseY,
+      rows: this.terminal.rows,
+      cols: this.terminal.cols,
+      cursor: { x: buffer.cursorX, y: buffer.cursorY },
+      buffer: bufferName,
+    };
+  }
+
+  /**
+   * Get a range of lines from the buffer (including scrollback)
+   */
+  getBufferRange(options: {
+    start: number;
+    count: number;
+    buffer?: "active" | "normal" | "alternate";
+    excludePattern?: string;
+    isRegex?: boolean;
+    excludeEmpty?: boolean;
+  }): BufferRangeSnapshot {
+    const bufferName = options.buffer ?? "active";
+    const buffer =
+      bufferName === "normal"
+        ? this.terminal.buffer.normal
+        : bufferName === "alternate"
+          ? this.terminal.buffer.alternate
+          : this.terminal.buffer.active;
+
+    const total = buffer.length;
+    let start = Math.trunc(options.start);
+    let count = Math.trunc(options.count);
+
+    if (!Number.isFinite(start) || !Number.isFinite(count)) {
+      throw new Error("start and count must be finite numbers");
+    }
+
+    if (start < 0) {
+      start = Math.max(0, total + start);
+    }
+
+    if (count < 0) {
+      count = 0;
+    }
+
+    if (start > total) {
+      start = total;
+    }
+
+    const end = Math.min(total, start + count);
+    const lines: string[] = [];
+    const lineNumWidth = Math.max(3, String(total).length);
+    const excludeEmpty = options.excludeEmpty ?? false;
+    const excludePattern = options.excludePattern;
+    const excludeRegex =
+      excludePattern && options.isRegex ? new RegExp(excludePattern) : undefined;
+
+    for (let i = start; i < end; i++) {
+      const line = buffer.getLine(i);
+      const text = line?.translateToString(true) || "";
+      if (excludeEmpty && text.trim().length === 0) {
+        continue;
+      }
+      if (excludeRegex && excludeRegex.test(text)) {
+        continue;
+      }
+      if (excludePattern && !options.isRegex && text.includes(excludePattern)) {
+        continue;
+      }
+      const lineNum = String(i + 1).padStart(lineNumWidth, " ");
+      lines.push(`${lineNum} | ${text}`);
+    }
+
+    return {
+      content: lines.join("\n"),
+      start,
+      count: end - start,
+      returned: lines.length,
+      total,
+      viewportY: buffer.viewportY,
+      baseY: buffer.baseY,
+      rows: this.terminal.rows,
+      cols: this.terminal.cols,
+      buffer: bufferName,
+    };
+  }
+
+  /**
+   * Wait for buffer to reach a minimum length
+   */
+  async waitForBufferLines(options: {
+    minTotal?: number;
+    minDelta?: number;
+    timeout?: number;
+    interval?: number;
+    buffer?: "active" | "normal" | "alternate";
+  }): Promise<number> {
+    const bufferName = options.buffer ?? "active";
+    const buffer =
+      bufferName === "normal"
+        ? this.terminal.buffer.normal
+        : bufferName === "alternate"
+          ? this.terminal.buffer.alternate
+          : this.terminal.buffer.active;
+
+    const startLen = buffer.length;
+    const minDelta = options.minDelta ?? 0;
+    const minTotal = options.minTotal ?? 0;
+    const target = Math.max(minTotal, startLen + minDelta);
+    const timeout = options.timeout ?? 10000;
+    const interval = options.interval ?? 100;
+    const startTime = Date.now();
+
+    if (target <= startLen) {
+      return startLen;
+    }
+
+    while (Date.now() - startTime < timeout) {
+      if (buffer.length >= target) {
+        return buffer.length;
+      }
+      await new Promise((r) => setTimeout(r, interval));
+    }
+
+    throw new Error(
+      `Timeout waiting for buffer lines: target=${target} current=${buffer.length}`
+    );
   }
 
   /**

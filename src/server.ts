@@ -52,12 +52,13 @@ export function createServer(): ServerWithCallTool {
 
   // spawn_session
   toolHandlers["spawn_session"] = async (args) => {
-    const { command, args: cmdArgs, cwd, cols, rows } = args as {
+    const { command, args: cmdArgs, cwd, cols, rows, scrollback } = args as {
       command: string;
       args?: string[];
       cwd?: string;
       cols?: number;
       rows?: number;
+      scrollback?: number;
     };
     const session = manager.spawn({
       command,
@@ -65,6 +66,7 @@ export function createServer(): ServerWithCallTool {
       cwd,
       cols,
       rows,
+      scrollback,
     });
     return {
       content: [
@@ -87,15 +89,17 @@ export function createServer(): ServerWithCallTool {
         cwd: z.string().optional().describe("Working directory"),
         cols: z.number().optional().describe("Terminal width (default: 80)"),
         rows: z.number().optional().describe("Terminal height (default: 24)"),
+        scrollback: z.number().optional().describe("Scrollback buffer size in lines (default: 5000)"),
       },
     },
-    async ({ command, args, cwd, cols, rows }) => {
+    async ({ command, args, cwd, cols, rows, scrollback }) => {
       const result = await toolHandlers["spawn_session"]({
         command,
         args,
         cwd,
         cols,
         rows,
+        scrollback,
       });
       return toMcpResult(result);
     }
@@ -190,6 +194,207 @@ export function createServer(): ServerWithCallTool {
     },
     async ({ session_id, include_ansi }) => {
       const result = await toolHandlers["get_snapshot"]({ session_id, include_ansi });
+      return toMcpResult(result);
+    }
+  );
+
+  // get_buffer_info - read buffer metadata
+  toolHandlers["get_buffer_info"] = async (args) => {
+    const { session_id, buffer } = args as {
+      session_id: string;
+      buffer?: "active" | "normal" | "alternate";
+    };
+    const session = manager.get(session_id);
+    if (!session) {
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify({ error: "Session not found" }) },
+        ],
+      };
+    }
+    const info = session.getBufferInfo(buffer);
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(info) }],
+    };
+  };
+
+  server.registerTool(
+    "get_buffer_info",
+    {
+      title: "Get Buffer Info",
+      description: "Get buffer metadata (length, viewport, cursor) for deterministic reads",
+      inputSchema: {
+        session_id: z.string().describe("Session ID from spawn_session"),
+        buffer: z
+          .enum(["active", "normal", "alternate"])
+          .optional()
+          .describe("Which buffer to read (default: active)"),
+      },
+    },
+    async ({ session_id, buffer }) => {
+      const result = await toolHandlers["get_buffer_info"]({ session_id, buffer });
+      return toMcpResult(result);
+    }
+  );
+
+  // get_buffer_range - read buffer including scrollback
+  toolHandlers["get_buffer_range"] = async (args) => {
+    const { session_id, start, count, buffer, exclude_pattern, is_regex, exclude_empty } = args as {
+      session_id: string;
+      start: number;
+      count: number;
+      buffer?: "active" | "normal" | "alternate";
+      exclude_pattern?: string;
+      is_regex?: boolean;
+      exclude_empty?: boolean;
+    };
+    const session = manager.get(session_id);
+    if (!session) {
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify({ error: "Session not found" }) },
+        ],
+      };
+    }
+    const range = session.getBufferRange({
+      start,
+      count,
+      buffer,
+      excludePattern: exclude_pattern,
+      isRegex: is_regex,
+      excludeEmpty: exclude_empty,
+    });
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(range) }],
+    };
+  };
+
+  server.registerTool(
+    "get_buffer_range",
+    {
+      title: "Get Buffer Range",
+      description:
+        "Read a range of lines from the terminal buffer, including scrollback. Use negative start to count from the end (e.g. -100 = last 100 lines).",
+      inputSchema: {
+        session_id: z.string().describe("Session ID from spawn_session"),
+        start: z.number().describe("0-based start line index (negative counts from end)"),
+        count: z.number().describe("Number of lines to read"),
+        buffer: z
+          .enum(["active", "normal", "alternate"])
+          .optional()
+          .describe("Which buffer to read (default: active)"),
+        exclude_pattern: z
+          .string()
+          .optional()
+          .describe("Exclude lines containing this pattern (or regex if is_regex=true)"),
+        is_regex: z.boolean().optional().describe("Treat exclude_pattern as regex (default: false)"),
+        exclude_empty: z.boolean().optional().describe("Exclude empty/whitespace-only lines"),
+      },
+    },
+    async ({ session_id, start, count, buffer, exclude_pattern, is_regex, exclude_empty }) => {
+      const result = await toolHandlers["get_buffer_range"]({
+        session_id,
+        start,
+        count,
+        buffer,
+        exclude_pattern,
+        is_regex,
+        exclude_empty,
+      });
+      return toMcpResult(result);
+    }
+  );
+
+  // wait_for_buffer_lines - wait for buffer length to increase
+  toolHandlers["wait_for_buffer_lines"] = async (args) => {
+    const { session_id, min_total, min_delta, timeout, interval, buffer } = args as {
+      session_id: string;
+      min_total?: number;
+      min_delta?: number;
+      timeout?: number;
+      interval?: number;
+      buffer?: "active" | "normal" | "alternate";
+    };
+    const session = manager.get(session_id);
+    if (!session) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ success: false, error: "Session not found" }),
+          },
+        ],
+      };
+    }
+    if (min_total === undefined && min_delta === undefined) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              success: false,
+              error: "Either min_total or min_delta must be provided",
+            }),
+          },
+        ],
+      };
+    }
+    try {
+      const total = await session.waitForBufferLines({
+        minTotal: min_total,
+        minDelta: min_delta,
+        timeout,
+        interval,
+        buffer,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({ success: true, total }) }],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              success: false,
+              error: err instanceof Error ? err.message : "Timeout",
+            }),
+          },
+        ],
+      };
+    }
+  };
+
+  server.registerTool(
+    "wait_for_buffer_lines",
+    {
+      title: "Wait For Buffer Lines",
+      description:
+        "Wait until the buffer reaches a minimum line count (absolute or delta). Useful for long outputs without polling.",
+      inputSchema: {
+        session_id: z.string().describe("Session ID from spawn_session"),
+        min_total: z.number().optional().describe("Minimum total buffer lines to wait for"),
+        min_delta: z
+          .number()
+          .optional()
+          .describe("Minimum number of new lines to wait for relative to current length"),
+        timeout: z.number().optional().describe("Timeout in milliseconds (default: 10000)"),
+        interval: z.number().optional().describe("Polling interval in milliseconds (default: 100)"),
+        buffer: z
+          .enum(["active", "normal", "alternate"])
+          .optional()
+          .describe("Which buffer to read (default: active)"),
+      },
+    },
+    async ({ session_id, min_total, min_delta, timeout, interval, buffer }) => {
+      const result = await toolHandlers["wait_for_buffer_lines"]({
+        session_id,
+        min_total,
+        min_delta,
+        timeout,
+        interval,
+        buffer,
+      });
       return toMcpResult(result);
     }
   );

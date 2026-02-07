@@ -23,6 +23,8 @@ This MCP server gives agents **eyes** (screen buffer) and **hands** (keyboard in
 | `send_keys` | Type text or press special keys |
 | `send_line` | **NEW** Send text + Enter (most common operation) |
 | `get_snapshot` | Read the current screen buffer |
+| `get_buffer_range` | **NEW** Read buffer lines (includes scrollback) |
+| `get_buffer_info` | **NEW** Read buffer metadata (length, viewport, cursor) |
 | `get_cursor` | **NEW** Get cursor position (x, y) |
 | `resize` | Change terminal dimensions |
 | `list_sessions` | List active sessions |
@@ -34,6 +36,7 @@ This MCP server gives agents **eyes** (screen buffer) and **hands** (keyboard in
 |------|-------------|
 | `wait_for_content` | **NEW** Wait for specific text/pattern to appear |
 | `wait_for_idle` | **NEW** Wait for screen to stop changing |
+| `wait_for_buffer_lines` | **NEW** Wait for buffer line count to increase |
 
 ## Correct Usage
 
@@ -216,6 +219,32 @@ wait_for_content({
 // Get raw ANSI escape sequences for debugging
 get_snapshot({ session_id, include_ansi: true })
 → Returns: { content: "...", rawAnsi: "\x1b[1;1H\x1b[2J..." }
+```
+
+### Read scrollback (long output)
+
+```
+send_line({ session_id, text: "Get-Content big.log" })
+wait_for_idle({ session_id, timeout: 10000 })
+
+// Read last 200 lines from buffer
+get_buffer_range({ session_id, start: -200, count: 200 })
+```
+
+### Deterministic reads (buffer metadata)
+
+```
+const info = get_buffer_info({ session_id })
+// info.total is the buffer length (including scrollback)
+get_buffer_range({ session_id, start: info.total - 200, count: 200 })
+```
+
+### Wait for long output (line count)
+
+```
+send_line({ session_id, text: "1..500 | ForEach-Object { \"Line $_\" }" })
+wait_for_buffer_lines({ session_id, min_delta: 500, timeout: 10000 })
+get_buffer_range({ session_id, start: -50, count: 50, exclude_pattern: "PS ", is_regex: false })
 ```
 
 ## Snapshot Format
